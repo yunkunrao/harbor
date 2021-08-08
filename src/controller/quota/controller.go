@@ -63,6 +63,9 @@ type Controller interface {
 	// IsEnabled returns true when quota enabled for reference object
 	IsEnabled(ctx context.Context, reference, referenceID string) (bool, error)
 
+	// IsSoftQuota returns true when soft quota enabled for reference object
+	IsSoftQuota(ctx context.Context, reference, referenceID string) (bool, error)
+
 	// List list quotas
 	List(ctx context.Context, query *q.Query, options ...Option) ([]*quota.Quota, error)
 
@@ -73,7 +76,7 @@ type Controller interface {
 	// Before run the function, it reserves the resources,
 	// then runs f and refresh quota when f success，
 	// in the finally it releases the resources which reserved at the beginning.
-	Request(ctx context.Context, reference, referenceID string, resources types.ResourceList, f func() error) error
+	Request(ctx context.Context, reference, referenceID string, resources types.ResourceList, softQuotaEnabled bool, f func() error) error
 
 	// Update update quota
 	Update(ctx context.Context, q *quota.Quota) error
@@ -149,6 +152,15 @@ func (c *controller) IsEnabled(ctx context.Context, reference, referenceID strin
 	}
 
 	return d.Enabled(ctx, referenceID)
+}
+
+func (c *controller) IsSoftQuota(ctx context.Context, reference, referenceID string) (bool, error) {
+	d, err := Driver(ctx, reference)
+	if err != nil {
+		return false, err
+	}
+
+	return d.SoftQuotaEnabled(ctx, referenceID)
 }
 
 func (c *controller) List(ctx context.Context, query *q.Query, options ...Option) ([]*quota.Quota, error) {
@@ -318,20 +330,57 @@ func (c *controller) Refresh(ctx context.Context, reference, referenceID string,
 	return orm.WithTransaction(refresh)(ctx)
 }
 
-func (c *controller) Request(ctx context.Context, reference, referenceID string, resources types.ResourceList, f func() error) error {
+func (c *controller) Request(ctx context.Context, reference, referenceID string, resources types.ResourceList, softQuotaEnabled bool, f func() error) error {
 	if len(resources) == 0 {
 		return f()
 	}
 
-	if err := c.reserveResources(ctx, reference, referenceID, resources); err != nil {
-		return err
+	if softQuotaEnabled {
+		// soft quota
+		driver, err := Driver(ctx, reference)
+		if err != nil {
+			return err
+		}
+		currentUsed, err := driver.CalculateUsage(ctx, referenceID)
+		if err != nil {
+			log.G(ctx).Errorf("failed to calculate quota usage for %s %s, error: %v", reference, referenceID, err)
+			return err
+		}
+		if negativeUsed := types.IsNegative(currentUsed); len(negativeUsed) > 0 {
+			return fmt.Errorf("quota usage is negative for resource(s): %s", quota.PrettyPrintResourceNames(negativeUsed))
+		}
+
+		q, err := c.quotaMgr.GetByRefForUpdate(ctx, reference, referenceID)
+		if err != nil {
+			return err
+		}
+
+		hardLimits, err := q.GetHard()
+		if err != nil {
+			return err
+		}
+
+		if err := quota.IsSafe(hardLimits, currentUsed, currentUsed, false); err != nil {
+			return err
+		}
+
+	} else {
+		// hard quota
+		if err := c.reserveResources(ctx, reference, referenceID, resources); err != nil {
+			return err
+		}
 	}
 
+
 	defer func() {
-		if err := c.unreserveResources(ctx, reference, referenceID, resources); err != nil {
-			// ignore this error because reserved resources will be expired
-			// when no actions on the key of the reserved resources in redis during sometimes
-			log.G(ctx).Warningf("unreserve resources %s for %s %s failed, error: %v", resources.String(), reference, referenceID, err)
+		if softQuotaEnabled {
+			// skip soft quota
+		} else {
+			if err := c.unreserveResources(ctx, reference, referenceID, resources); err != nil {
+				// ignore this error because reserved resources will be expired
+				// when no actions on the key of the reserved resources in redis during sometimes
+				log.G(ctx).Warningf("unreserve resources %s for %s %s failed, error: %v", resources.String(), reference, referenceID, err)
+			}
 		}
 	}()
 
@@ -339,7 +388,7 @@ func (c *controller) Request(ctx context.Context, reference, referenceID string,
 		return err
 	}
 
-	return c.Refresh(ctx, reference, referenceID)
+	return c.Refresh(ctx, reference, referenceID, IgnoreLimitation(softQuotaEnabled))
 }
 
 func (c *controller) Update(ctx context.Context, u *quota.Quota) error {

@@ -33,6 +33,8 @@ type RefObject map[string]interface{}
 type Driver interface {
 	// Enabled returns true when quota enabled for the ref object
 	Enabled(ctx context.Context, key string) (bool, error)
+	// Enabled returns true when soft quota enabled for the ref object
+	SoftQuotaEnabled(ctx context.Context, key string) (bool, error)
 	// HardLimits returns default resource list
 	HardLimits(ctx context.Context) types.ResourceList
 	// Load returns quota ref object by key

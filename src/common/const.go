@@ -151,6 +151,7 @@ const (
 
 	// Quota setting items for project
 	QuotaPerProjectEnable = "quota_per_project_enable"
+	SoftQuotaPerProjectEnable = "soft_quota_per_project_enable"
 	CountPerProject       = "count_per_project"
 	StoragePerProject     = "storage_per_project"
 

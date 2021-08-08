@@ -89,6 +89,13 @@ func RequestMiddleware(config RequestConfig, skippers ...middleware.Skipper) fun
 			return
 		}
 
+		softQuotaEnabled, err := quotaController.IsSoftQuota(r.Context(), reference, referenceID)
+		if err != nil {
+			logger.Errorf("check whether soft quota enabled for %s %s failed, error: %v", reference, referenceID, err)
+			lib_http.SendError(w, err)
+			return
+		}
+
 		resources, err := config.Resources(r, reference, referenceID)
 		if err != nil {
 			logger.Errorf("get resources failed, error: %v", err)
@@ -110,7 +117,7 @@ func RequestMiddleware(config RequestConfig, skippers ...middleware.Skipper) fun
 			defer res.Flush()
 		}
 
-		err = quotaController.Request(r.Context(), reference, referenceID, resources, func() error {
+		err = quotaController.Request(r.Context(), reference, referenceID, resources, softQuotaEnabled, func() error {
 			next.ServeHTTP(res, r)
 			if !res.Success() {
 				return errNonSuccess

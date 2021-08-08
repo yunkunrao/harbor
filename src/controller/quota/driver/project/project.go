@@ -48,6 +48,14 @@ func (d *driver) Enabled(ctx context.Context, key string) (bool, error) {
 	return d.cfg.Get(common.QuotaPerProjectEnable).GetBool(), nil
 }
 
+func (d *driver) SoftQuotaEnabled(ctx context.Context, key string) (bool, error) {
+	// NOTE: every time load the new configurations from the db to get the latest configurations may have performance problem.
+	if err := d.cfg.Load(); err != nil {
+		return false, err
+	}
+	return d.cfg.Get(common.SoftQuotaPerProjectEnable).GetBool(), nil
+}
+
 func (d *driver) HardLimits(ctx context.Context) types.ResourceList {
 	// NOTE: every time load the new configurations from the db to get the latest configurations may have performance problem.
 	if err := d.cfg.Load(); err != nil {
